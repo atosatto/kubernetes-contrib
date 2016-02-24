@@ -5,15 +5,14 @@
       lineinfile:
         dest=/etc/hosts
         regexp=".*{{ item }}$"
-        line="{{ hostvars[item].ansible_default_ipv4.address }} {{item}}"
+        line="{{ hostvars[item].ansible_all_ipv4_addresses[0] }} {{item}}"
         state=present
-      when: hostvars[item].ansible_default_ipv4.address is defined
+      when: hostvars[item].ansible_all_ipv4_addresses[0] is defined
       with_items: groups['all']
     - name: "Remove hostname from localhost line"
       replace:
         dest=/etc/hosts
         regexp="{{ item }} localhost?"
         replace="localhost"
-      when: hostvars[item].ansible_default_ipv4.address is defined
+      when: hostvars[item].ansible_all_ipv4_addresses[0] is defined
       with_items: groups['all']
-
