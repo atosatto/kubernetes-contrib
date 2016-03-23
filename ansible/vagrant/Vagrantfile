@@ -8,6 +8,7 @@ require "yaml"
 require 'vagrant-openstack-provider'
 
 $num_nodes = (ENV['NUM_NODES'] || 2).to_i
+$num_masters = (ENV['NUM_MASTERS'] || 1).to_i
 ansible_tags = ENV['ANSIBLE_TAGS']
 
 VAGRANTFILE_API_VERSION = "2"
@@ -94,9 +95,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
+  # Kube Minions
   nodes = Array.new()
   $num_nodes.times do |i|
-    # multi vm config
     name = "kube-node-#{i+1}"
     nodes.push(name)
     config.vm.define "#{name}" do |n|
@@ -105,42 +106,51 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     end
   end
 
-  # This is how we create the ansible inventory, see it in .vagrant
-  # if you want to debug, run 'VAGRANT_LOG=info vagrant up'
-  # and you'll see exactly how the cluster comes up via ansible inv.
-  groups = {
-     "etcd" => ["kube-master"],
-     "masters" => ["kube-master"],
-     "nodes" => nodes,
-     "all_groups:children" => ["etcd","masters","nodes"]
-  }
+  # Kube Masters
+  masters = Array.new()
+  $num_masters.times do |i|
+    name = "kube-master-#{i+1}"
+    masters.push(name)
+    config.vm.define "#{name}" do |n|
+      n.vm.hostname = name
+      set_provider(n)
 
-  config.vm.define "kube-master" do |n|
-    name = "kube-master"
-    n.vm.hostname = name
-    set_provider(n)
+      # Once created the last kube-master, we run provisioning
+      if i == $num_masters - 1
+        # This is how we create the ansible inventory, see it in .vagrant
+        # if you want to debug, run 'VAGRANT_LOG=info vagrant up'
+        # and you'll see exactly how the cluster comes up via ansible inv.
+        groups = {
+           "etcd" => masters,
+           "masters" => masters,
+           "nodes" => nodes,
+           "all_groups:children" => ["etcd","masters","nodes"]
+        }
 
-    if ansible_tags.nil?
-      # This set up the vagrant hosts before we run the main playbook
-      # Today this just creates /etc/hosts so machines can talk via their
-      # 'internal' IPs instead of the openstack public ip.
-      n.vm.provision :ansible do |ansible|
-        ansible.groups = groups
-        ansible.playbook = "./vagrant-ansible.yml"
-        ansible.limit = "all" #otherwise the metadata wont be there for ipv4?
-        ansible.raw_ssh_args = ['-o ControlMaster=no']
+        if ansible_tags.nil?
+          # This set up the vagrant hosts before we run the main playbook
+          # Today this just creates /etc/hosts so machines can talk via their
+          # 'internal' IPs instead of the openstack public ip.
+          n.vm.provision :ansible do |ansible|
+            ansible.groups = groups
+            ansible.playbook = "./vagrant-ansible.yml"
+            ansible.limit = "all" #otherwise the metadata wont be there for ipv4?
+            ansible.raw_ssh_args = ['-o ControlMaster=no']
+          end
+        end
+
+        # This sets up both flannel and kube.
+        n.vm.provision :ansible do |ansible|
+          ansible.groups = groups
+          ansible.playbook = "../cluster.yml"
+          ansible.limit = "all" #otherwise the metadata wont be there for ipv4?
+          # for some hypervisors, like vbox, eth0 is not the right interface to bind to.
+          # ansible.extra_vars = { flannel_opts: "--iface=eth1"}
+          ansible.tags = ansible_tags
+          ansible.raw_ssh_args = ['-o ControlMaster=no']
+        end
       end
     end
-
-    # This sets up both flannel and kube.
-    n.vm.provision :ansible do |ansible|
-      ansible.groups = groups
-      ansible.playbook = "../cluster.yml"
-      ansible.limit = "all" #otherwise the metadata wont be there for ipv4?
-      # for some hypervisors, like vbox, eth0 is not the right interface to bind to.
-      # ansible.extra_vars = { flannel_opts: "--iface=eth1"}
-      ansible.tags = ansible_tags
-      ansible.raw_ssh_args = ['-o ControlMaster=no']
-    end
   end
+
 end
