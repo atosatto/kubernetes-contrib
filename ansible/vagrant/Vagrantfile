@@ -28,6 +28,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.provider "libvirt"
   config.vm.provider "virtualbox"
 
+  # Extra varibles to pass to the Ansible provisioner.
+  # Defined here to allow provider specific customizations.
+  $extra_vars = Hash.new()
+
   def set_openstack(os, config, n)
     # common config
     config.vm.box = "dummy"
@@ -70,6 +74,15 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     # Use faster paravirtualized networking
     vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
     vb.customize ["modifyvm", :id, "--nictype2", "virtio"]
+
+    # Customizing the ansible provisioning
+    $extra_vars = $extra_vars.merge({
+      # We cluster etcd on the private_network iface (eth1)
+      "etcd_peer_iface" => "ansible_eth1"
+      # for some hypervisors, like vbox, eth0 is not the right interface to bind to.
+      # ansible.extra_vars = { flannel_opts: "--iface=eth1"}
+    })
+
   end
 
   def set_libvirt(lv, config)
@@ -121,8 +134,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         # if you want to debug, run 'VAGRANT_LOG=info vagrant up'
         # and you'll see exactly how the cluster comes up via ansible inv.
         groups = {
-           "etcd" => masters,
            "masters" => masters,
+           "etcd:children" => "masters",
            "nodes" => nodes,
            "all_groups:children" => ["etcd","masters","nodes"]
         }
@@ -144,10 +157,11 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
           ansible.groups = groups
           ansible.playbook = "../cluster.yml"
           ansible.limit = "all" #otherwise the metadata wont be there for ipv4?
-          # for some hypervisors, like vbox, eth0 is not the right interface to bind to.
-          # ansible.extra_vars = { flannel_opts: "--iface=eth1"}
           ansible.tags = ansible_tags
+          ansible.extra_vars = $extra_vars
           ansible.raw_ssh_args = ['-o ControlMaster=no']
+          # enables verbose output
+          # ansible.raw_arguments = ['-vvv']
         end
       end
     end
